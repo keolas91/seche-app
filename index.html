@@ -1,0 +1,90 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Sèche — Suivi repas & entraînements</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#16a34a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Sèche" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+
+<div id="app">
+  <!-- Écran de profil initial -->
+  <div id="onboarding" class="onboarding hidden">
+    <div class="onb-card">
+      <h1>👋 Bienvenue</h1>
+      <p class="muted">Configurons ton profil pour calculer tes objectifs de sèche.</p>
+      <label>Sexe
+        <select id="onb-sex">
+          <option value="h">Homme</option>
+          <option value="f">Femme</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>Taille (cm)<input id="onb-height" type="number" value="179" /></label>
+        <label>Poids (kg)<input id="onb-weight" type="number" value="81" /></label>
+      </div>
+      <div class="row">
+        <label>Âge<input id="onb-age" type="number" value="27" /></label>
+        <label>Poids cible (kg)<input id="onb-goal" type="number" value="75" /></label>
+      </div>
+      <label>Niveau d'activité (hors sport)
+        <select id="onb-activity">
+          <option value="1.375">Sédentaire (bureau)</option>
+          <option value="1.55" selected>Modéré (debout / actif)</option>
+          <option value="1.725">Élevé (métier physique)</option>
+        </select>
+      </label>
+      <label>Intensité de la sèche
+        <select id="onb-deficit">
+          <option value="0.15">Douce (-15%) — garde le muscle</option>
+          <option value="0.20" selected>Standard (-20%)</option>
+          <option value="0.25">Agressive (-25%)</option>
+        </select>
+      </label>
+      <button id="onb-save" class="btn-primary big">Calculer mes objectifs →</button>
+    </div>
+  </div>
+
+  <!-- En-tête -->
+  <header id="topbar" class="hidden">
+    <div class="brand">🔥 <span>Sèche</span></div>
+    <div id="today-score-chip" class="score-chip" title="Score du jour">–</div>
+  </header>
+
+  <!-- Contenu par onglet -->
+  <main id="views" class="hidden">
+    <section id="view-home" class="view"></section>
+    <section id="view-meals" class="view hidden"></section>
+    <section id="view-plan" class="view hidden"></section>
+    <section id="view-train" class="view hidden"></section>
+    <section id="view-progress" class="view hidden"></section>
+    <section id="view-foods" class="view hidden"></section>
+    <section id="view-settings" class="view hidden"></section>
+  </main>
+
+  <!-- Barre de navigation -->
+  <nav id="tabbar" class="hidden">
+    <button data-view="home" class="tab active"><span>🏠</span>Aujourd'hui</button>
+    <button data-view="meals" class="tab"><span>🍽️</span>Repas</button>
+    <button data-view="plan" class="tab"><span>📅</span>Semaine</button>
+    <button data-view="train" class="tab"><span>💪</span>Sport</button>
+    <button data-view="progress" class="tab"><span>📈</span>Progrès</button>
+    <button data-view="foods" class="tab"><span>🥑</span>Aliments</button>
+    <button data-view="settings" class="tab"><span>⚙️</span>Réglages</button>
+  </nav>
+</div>
+
+<!-- Modale générique -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div id="modal" class="modal"></div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="data/foods.js"></script>
+<script src="data/mealplan.js"></script>
+<script src="app.js"></script>

@@ -1,0 +1,15 @@
+{
+  "name": "Sèche — Suivi repas & sport",
+  "short_name": "Sèche",
+  "description": "Suivi de sèche : repas en photo, macros, entraînements et progression.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f6f9",
+  "theme_color": "#16a34a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "maskable" }
+  ]
+}
