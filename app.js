@@ -357,7 +357,7 @@ Les macros sont en grammes pour la portion visible. Estime au mieux même si inc
 const PROVIDERS = {
   gemini: {
     label: 'Google Gemini (gratuit)', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey',
-    models: [['gemini-2.5-flash', 'Gemini 2.5 Flash — recommandé'], ['gemini-2.0-flash', 'Gemini 2.0 Flash — rapide']],
+    models: [['gemini-2.0-flash', 'Gemini 2.0 Flash'], ['gemini-flash-latest', 'Gemini Flash (dernier)']],
   },
   claude: {
     label: 'Anthropic Claude', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys',
@@ -384,8 +384,26 @@ async function analyzePhoto(dataUrl) {
   return currentProvider() === 'claude' ? analyzeClaude(media_type, b64) : analyzeGemini(media_type, b64);
 }
 
-async function analyzeGemini(media_type, b64) {
-  const model = (state.settings.model || '').startsWith('gemini') ? state.settings.model : 'gemini-2.5-flash';
+async function listGeminiModels(apiKey) {
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', {
+    headers: { 'x-goog-api-key': apiKey },
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${/API_KEY_INVALID|not valid/i.test(t) ? 'clé invalide' : t.slice(0, 80)}`);
+  }
+  const data = await res.json();
+  return (data.models || [])
+    .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m) => (m.name || '').replace(/^models\//, ''))
+    .filter((n) => /gemini/i.test(n) && /(flash|pro)/i.test(n) && !/(embedding|tts|audio|imagen|image-generation|live)/i.test(n));
+}
+function pickGeminiDefault(models) {
+  return models.find((m) => /flash/.test(m) && !/lite/.test(m)) || models.find((m) => /flash/.test(m)) || models[0];
+}
+
+async function analyzeGemini(media_type, b64, retried) {
+  const model = (state.settings.model || '').startsWith('gemini') ? state.settings.model : 'gemini-2.0-flash';
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': state.settings.apiKey },
@@ -396,15 +414,22 @@ async function analyzeGemini(media_type, b64) {
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
+    // Auto-réparation : si le modèle n'existe pas (404), détecte-en un valide et réessaie une fois
+    if (res.status === 404 && !retried) {
+      const models = await listGeminiModels(state.settings.apiKey).catch(() => []);
+      const def = pickGeminiDefault(models);
+      if (def && def !== model) { state.settings.model = def; save(); return analyzeGemini(media_type, b64, true); }
+    }
     let msg = t.slice(0, 160);
     if (res.status === 400 && /API_KEY_INVALID|API key not valid/i.test(t)) msg = 'Clé API invalide.';
-    else if (res.status === 403) msg = 'Accès refusé — vérifie ta clé (restrictions de domaine ?).';
+    else if (res.status === 403) msg = 'Accès refusé — vérifie ta clé.';
+    else if (res.status === 404) msg = 'Modèle indisponible — Réglages → « Détecter mes modèles ».';
     else if (res.status === 429) msg = 'Quota atteint, réessaie dans un moment.';
     throw new Error(`Gemini ${res.status} — ${msg}`);
   }
   const data = await res.json();
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-  const txt = parts.map(p => p.text || '').join('').trim();
+  const txt = parts.map((p) => p.text || '').join('').trim();
   return normalizeVision(extractJson(txt));
 }
 
@@ -814,6 +839,7 @@ RENDERERS.settings = (root) => {
         </select></label>
       <label>Clé API<input id="s-key" type="password" value="${esc(state.settings.apiKey)}" placeholder="${PROVIDERS[prov].keyHint}"/></label>
       <label>Modèle<select id="s-model"></select></label>
+      <button class="btn-ghost sm" id="s-detect" style="${prov === 'gemini' ? '' : 'display:none'};margin-bottom:10px">🔄 Détecter mes modèles</button>
       <button class="btn-ghost" id="s-save-key">Enregistrer</button>
       <p class="muted mt" style="font-size:12px">🔑 Créer une clé gratuite : <a id="s-key-link" href="${PROVIDERS[prov].keyUrl}" target="_blank" rel="noopener">${prov === 'gemini' ? 'aistudio.google.com' : 'console.anthropic.com'}</a></p>
       <p class="muted" style="font-size:12px">🔒 Ta clé reste sur cet appareil, envoyée uniquement au fournisseur choisi.</p>
@@ -849,18 +875,35 @@ RENDERERS.settings = (root) => {
       `<option value="${v}" ${state.settings.model === v ? 'selected' : ''}>${l}</option>`).join('');
   };
   fillModels(prov);
+  const detectModels = async (silent) => {
+    const key = $('#s-key').value.trim();
+    if (!key) { if (!silent) toast('Colle d\'abord ta clé'); return; }
+    const btn = $('#s-detect'); const lbl = btn.textContent; btn.textContent = 'Détection…'; btn.disabled = true;
+    try {
+      const models = await listGeminiModels(key);
+      if (!models.length) throw new Error('aucun modèle vision');
+      const def = pickGeminiDefault(models);
+      $('#s-model').innerHTML = models.map((m) => `<option value="${m}" ${m === def ? 'selected' : ''}>${m}</option>`).join('');
+      state.settings.model = def; save();
+      toast('Modèle : ' + def + ' ✓');
+    } catch (e) { toast('Détection échouée : ' + e.message); }
+    finally { btn.textContent = lbl; btn.disabled = false; }
+  };
   provSel.onchange = () => {
     const pv = provSel.value;
     fillModels(pv);
     $('#s-key').placeholder = PROVIDERS[pv].keyHint;
+    $('#s-detect').style.display = pv === 'gemini' ? '' : 'none';
     const lk = $('#s-key-link'); lk.href = PROVIDERS[pv].keyUrl;
     lk.textContent = pv === 'gemini' ? 'aistudio.google.com' : 'console.anthropic.com';
   };
-  $('#s-save-key').onclick = () => {
+  $('#s-detect').onclick = () => detectModels(false);
+  $('#s-save-key').onclick = async () => {
     state.settings.provider = provSel.value;
     state.settings.apiKey = $('#s-key').value.trim();
     state.settings.model = $('#s-model').value;
     save(); toast('Réglages enregistrés ✓');
+    if (state.settings.provider === 'gemini' && state.settings.apiKey) await detectModels(true);
   };
   $('#s-export').onclick = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
