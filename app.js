@@ -15,7 +15,7 @@ const DEFAULT_STATE = {
   weights: [],      // [{date,kg}]
   foodPrefs: {},    // nom -> true/false
   customFoods: [],  // [{nom,categorie,kcal,proteines,glucides,lipides}]
-  settings: { apiKey: '', model: 'claude-haiku-4-5-20251001' },
+  settings: { provider: 'gemini', apiKey: '', model: 'gemini-2.5-flash' },
 };
 let state = load();
 
@@ -312,8 +312,8 @@ function addMealFlow(dateStr) {
     </div>
     <p class="muted mt" style="font-size:12px">
       ${hasKey
-        ? 'La photo est analysée par Claude pour estimer calories et macros.'
-        : 'Ajoute ta clé API Claude dans Réglages pour activer l\'analyse photo automatique. Sinon, saisis à la main.'}
+        ? 'La photo est analysée par l\'IA pour estimer calories et macros.'
+        : 'Ajoute ta clé API (Gemini gratuit ou Claude) dans Réglages pour activer l\'analyse photo. Sinon, saisis à la main.'}
     </p>
     <input type="file" id="am-file" accept="image/*" capture="environment" class="hidden"/>
     <div id="am-work"></div>
@@ -349,14 +349,67 @@ async function analyzePhotoFlow(dateStr, slot, dataUrl) {
   }
 }
 
+const VISION_PROMPT = `Tu es un nutritionniste. Analyse cette photo de repas et estime son contenu.
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour, au format exact :
+{"plat":"nom court du plat","ingredients":"liste courte des aliments visibles","kcal":number,"proteines":number,"glucides":number,"lipides":number,"confiance":"faible|moyenne|élevée"}
+Les macros sont en grammes pour la portion visible. Estime au mieux même si incertain.`;
+
+const PROVIDERS = {
+  gemini: {
+    label: 'Google Gemini (gratuit)', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey',
+    models: [['gemini-2.5-flash', 'Gemini 2.5 Flash — recommandé'], ['gemini-2.0-flash', 'Gemini 2.0 Flash — rapide']],
+  },
+  claude: {
+    label: 'Anthropic Claude', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys',
+    models: [['claude-haiku-4-5-20251001', 'Haiku 4.5 — le moins cher'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-opus-4-8', 'Opus 4.8']],
+  },
+};
+function currentProvider() { return PROVIDERS[state.settings.provider] ? state.settings.provider : 'gemini'; }
+
+function extractJson(txt) {
+  const jm = (txt || '').match(/\{[\s\S]*\}/);
+  if (!jm) throw new Error('Réponse illisible (réessaie avec une photo plus nette)');
+  return JSON.parse(jm[0]);
+}
+function normalizeVision(obj) {
+  ['kcal', 'proteines', 'glucides', 'lipides'].forEach(k => obj[k] = Math.round(Number(obj[k]) || 0));
+  return obj;
+}
+
 async function analyzePhoto(dataUrl) {
   const m = dataUrl.match(/^data:(image\/\w+);base64,(.*)$/);
   if (!m) throw new Error('Image invalide');
   const media_type = m[1], b64 = m[2];
-  const prompt = `Tu es un nutritionniste. Analyse cette photo de repas et estime son contenu.
-Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour, au format exact :
-{"plat":"nom court du plat","ingredients":"liste courte des aliments visibles","kcal":number,"proteines":number,"glucides":number,"lipides":number,"confiance":"faible|moyenne|élevée"}
-Les macros sont en grammes pour la portion visible. Estime au mieux même si incertain.`;
+  if (!state.settings.apiKey) throw new Error('Aucune clé API — ajoute-la dans Réglages');
+  return currentProvider() === 'claude' ? analyzeClaude(media_type, b64) : analyzeGemini(media_type, b64);
+}
+
+async function analyzeGemini(media_type, b64) {
+  const model = (state.settings.model || '').startsWith('gemini') ? state.settings.model : 'gemini-2.5-flash';
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': state.settings.apiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ inline_data: { mime_type: media_type, data: b64 } }, { text: VISION_PROMPT }] }],
+      generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    let msg = t.slice(0, 160);
+    if (res.status === 400 && /API_KEY_INVALID|API key not valid/i.test(t)) msg = 'Clé API invalide.';
+    else if (res.status === 403) msg = 'Accès refusé — vérifie ta clé (restrictions de domaine ?).';
+    else if (res.status === 429) msg = 'Quota atteint, réessaie dans un moment.';
+    throw new Error(`Gemini ${res.status} — ${msg}`);
+  }
+  const data = await res.json();
+  const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+  const txt = parts.map(p => p.text || '').join('').trim();
+  return normalizeVision(extractJson(txt));
+}
+
+async function analyzeClaude(media_type, b64) {
+  const model = (state.settings.model || '').startsWith('claude') ? state.settings.model : 'claude-haiku-4-5-20251001';
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -366,27 +419,20 @@ Les macros sont en grammes pour la portion visible. Estime au mieux même si inc
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
-      model: state.settings.model,
-      max_tokens: 500,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type, data: b64 } },
-          { type: 'text', text: prompt },
-        ],
-      }],
+      model, max_tokens: 500,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type, data: b64 } },
+        { type: 'text', text: VISION_PROMPT },
+      ] }],
     }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}. ${res.status === 401 ? 'Clé API invalide.' : t.slice(0, 120)}`);
+    throw new Error(`Claude ${res.status} — ${res.status === 401 ? 'Clé API invalide.' : t.slice(0, 140)}`);
   }
   const data = await res.json();
-  let txt = (data.content || []).map(c => c.text || '').join('').trim();
-  const jm = txt.match(/\{[\s\S]*\}/); if (!jm) throw new Error('Réponse illisible');
-  const obj = JSON.parse(jm[0]);
-  ['kcal', 'proteines', 'glucides', 'lipides'].forEach(k => obj[k] = Math.round(Number(obj[k]) || 0));
-  return obj;
+  const txt = (data.content || []).map(c => c.text || '').join('').trim();
+  return normalizeVision(extractJson(txt));
 }
 
 function manualMealForm(dateStr, slot, pre = {}) {
@@ -735,6 +781,7 @@ function customFoodModal() {
 /* ---------- RÉGLAGES ---------- */
 RENDERERS.settings = (root) => {
   const p = state.profile;
+  const prov = currentProvider();
   root.innerHTML = `
     <div class="card">
       <h2>👤 Profil & objectifs</h2>
@@ -758,17 +805,18 @@ RENDERERS.settings = (root) => {
     </div>
 
     <div class="card">
-      <h2>🤖 Analyse photo (Claude)</h2>
-      <p class="muted" style="font-size:13px">Colle ta clé API Anthropic pour estimer automatiquement calories & macros depuis une photo. Elle reste stockée uniquement sur cet appareil.</p>
-      <label>Clé API<input id="s-key" type="password" value="${esc(state.settings.apiKey)}" placeholder="sk-ant-..."/></label>
-      <label>Modèle
-        <select id="s-model">
-          <option value="claude-haiku-4-5-20251001" ${state.settings.model === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Haiku 4.5 — le moins cher</option>
-          <option value="claude-sonnet-5" ${state.settings.model === 'claude-sonnet-5' ? 'selected' : ''}>Sonnet 5 — équilibré</option>
-          <option value="claude-opus-4-8" ${state.settings.model === 'claude-opus-4-8' ? 'selected' : ''}>Opus 4.8 — le plus précis</option>
+      <h2>🤖 Analyse photo (IA)</h2>
+      <p class="muted" style="font-size:13px">Choisis un fournisseur et colle ta clé pour estimer calories & macros depuis une photo. La clé reste stockée uniquement sur cet appareil.</p>
+      <label>Fournisseur
+        <select id="s-provider">
+          <option value="gemini" ${prov === 'gemini' ? 'selected' : ''}>Google Gemini — gratuit ✅</option>
+          <option value="claude" ${prov === 'claude' ? 'selected' : ''}>Anthropic Claude</option>
         </select></label>
-      <button class="btn-ghost" id="s-save-key">Enregistrer la clé</button>
-      <p class="muted mt" style="font-size:12px">🔒 Depuis un navigateur, ta clé est visible côté client. OK pour un usage perso en local. Pour une mise en ligne publique, passe par un petit serveur relais (voir README).</p>
+      <label>Clé API<input id="s-key" type="password" value="${esc(state.settings.apiKey)}" placeholder="${PROVIDERS[prov].keyHint}"/></label>
+      <label>Modèle<select id="s-model"></select></label>
+      <button class="btn-ghost" id="s-save-key">Enregistrer</button>
+      <p class="muted mt" style="font-size:12px">🔑 Créer une clé gratuite : <a id="s-key-link" href="${PROVIDERS[prov].keyUrl}" target="_blank" rel="noopener">${prov === 'gemini' ? 'aistudio.google.com' : 'console.anthropic.com'}</a></p>
+      <p class="muted" style="font-size:12px">🔒 Ta clé reste sur cet appareil, envoyée uniquement au fournisseur choisi.</p>
     </div>
 
     <div class="card">
@@ -795,10 +843,24 @@ RENDERERS.settings = (root) => {
     p.targets = computeTargets(p);
     save(); renderView('settings'); toast(`Objectif : ${p.targets.kcal} kcal / ${p.targets.proteines}g protéines`);
   };
+  const provSel = $('#s-provider');
+  const fillModels = (pv) => {
+    $('#s-model').innerHTML = PROVIDERS[pv].models.map(([v, l]) =>
+      `<option value="${v}" ${state.settings.model === v ? 'selected' : ''}>${l}</option>`).join('');
+  };
+  fillModels(prov);
+  provSel.onchange = () => {
+    const pv = provSel.value;
+    fillModels(pv);
+    $('#s-key').placeholder = PROVIDERS[pv].keyHint;
+    const lk = $('#s-key-link'); lk.href = PROVIDERS[pv].keyUrl;
+    lk.textContent = pv === 'gemini' ? 'aistudio.google.com' : 'console.anthropic.com';
+  };
   $('#s-save-key').onclick = () => {
+    state.settings.provider = provSel.value;
     state.settings.apiKey = $('#s-key').value.trim();
     state.settings.model = $('#s-model').value;
-    save(); toast('Clé enregistrée ✓');
+    save(); toast('Réglages enregistrés ✓');
   };
   $('#s-export').onclick = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });

@@ -30,23 +30,28 @@ et l'app calcule automatiquement tes objectifs (méthode **Mifflin-St Jeor**).
 ## 📸 Activer l'analyse de repas par photo (optionnel)
 
 Par défaut, tu saisis tes repas à la main (ou en piochant dans la base de 70 aliments).
-Pour que **Claude estime automatiquement les calories et macros depuis une photo** :
+Pour que l'**IA estime automatiquement les calories et macros depuis une photo**, tu as le choix
+entre deux fournisseurs (onglet **Réglages** → *Analyse photo*) :
 
-1. Récupère une clé API sur https://console.anthropic.com (facturation à l'usage).
-2. Dans l'app → onglet **Réglages** → colle ta clé et choisis le modèle.
-3. L'analyse photo est débloquée dans « Ajouter un repas ».
+### Option A — Google Gemini (gratuit, recommandé)
+1. Crée une clé sur https://aistudio.google.com/apikey (gratuit, sans carte bancaire). Elle commence par `AIza…`.
+2. App → **Réglages** → Fournisseur **Google Gemini** → colle la clé → Enregistrer.
+3. Le niveau gratuit couvre largement quelques photos par jour → **0 €**.
 
-**Modèle conseillé : Haiku 4.5** (largement suffisant pour lire une assiette, ~5× moins cher).
+### Option B — Anthropic Claude (payant à l'usage)
+1. Crée une clé sur https://console.anthropic.com/settings/keys (crédit prépayé requis).
+2. App → **Réglages** → Fournisseur **Anthropic Claude** → colle la clé (`sk-ant-…`) → Enregistrer.
 
-| Modèle | Coût / photo | ~90 photos/mois (3/jour) |
+| Fournisseur / modèle | Coût / photo | ~90 photos/mois (3/jour) |
 |---|---|---|
-| Haiku 4.5 | ~0,003 € | **~0,26 €/mois** |
-| Sonnet 5 | ~0,009 € | ~0,79 €/mois |
-| Opus 4.8 | ~0,015 € | ~1,32 €/mois |
+| **Gemini Flash** | **0 €** (free tier) | **0 €** |
+| Claude Haiku 4.5 | ~0,003 € | ~0,26 €/mois |
+| Claude Sonnet 5 | ~0,009 € | ~0,79 €/mois |
 
-> 🔒 En local, ta clé est stockée sur ton appareil. Dans un navigateur elle reste visible côté
-> client : c'est OK pour un usage perso. Pour une **mise en ligne publique**, ne mets jamais ta clé
-> dans le code — passe par un petit serveur relais (proxy) qui garde la clé côté serveur.
+> 🔒 Ta clé est stockée uniquement sur ton appareil (localStorage) et envoyée seulement au
+> fournisseur choisi — jamais dans le code ni le dépôt. Comme l'app est sur une URL publique,
+> pense à **restreindre ta clé Gemini à ton domaine** (referrer `keolas91.github.io`) dans la
+> console Google Cloud pour éviter tout usage par un tiers.
 
 ---
 

@@ -1,6 +1,6 @@
 /* Service worker : rend l'app installable et utilisable hors-ligne.
    Bump CACHE à chaque mise à jour pour rafraîchir. */
-const CACHE = 'seche-v1';
+const CACHE = 'seche-v2';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js',
   './data/foods.js', './data/mealplan.js',
