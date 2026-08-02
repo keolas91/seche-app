@@ -8,6 +8,10 @@
 
 /* ---------- Stockage ---------- */
 const KEY = 'seche_app_v1';
+// --- Sauvegarde en ligne (Supabase) ---
+const SUPA_URL = 'https://gnhpbcwywmkiaifbfiie.supabase.co';
+const SUPA_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduaHBiY3d5d21raWFpZmJmaWllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU2NjczNzIsImV4cCI6MjEwMTI0MzM3Mn0.dYNC5lbLtkwg67jx_TSJol_Wjzpbf6Z53-GDlgoyJ00';
+const SYNC_KEY = 'seche_sync_id';
 const DEFAULT_STATE = {
   profile: null,
   meals: {},        // 'YYYY-MM-DD' -> [meal]
@@ -31,7 +35,58 @@ function load() {
   }
   return st;
 }
-function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
+let _pushTimer = null;
+function save() {
+  state._ts = Date.now();
+  localStorage.setItem(KEY, JSON.stringify(state));
+  if (cloudOn()) { clearTimeout(_pushTimer); _pushTimer = setTimeout(() => cloudPush(state).catch(() => {}), 1000); }
+}
+
+/* ---------- Sauvegarde en ligne (Supabase) ---------- */
+function uuidv4() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+function syncId() {
+  let id = localStorage.getItem(SYNC_KEY);
+  if (!id) { id = uuidv4(); localStorage.setItem(SYNC_KEY, id); }
+  return id;
+}
+function setSyncId(id) { localStorage.setItem(SYNC_KEY, id); }
+function cloudOn() { return localStorage.getItem('seche_cloud') !== '0'; }
+function setCloudOn(on) { localStorage.setItem('seche_cloud', on ? '1' : '0'); }
+
+async function cloudCall(fn, body) {
+  const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: { apikey: SUPA_ANON, Authorization: 'Bearer ' + SUPA_ANON, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error('cloud ' + res.status);
+  const txt = await res.text();
+  return txt ? JSON.parse(txt) : null;
+}
+function cloudPull() { return cloudCall('get_state', { p_id: syncId() }); }
+function cloudPush(data) { return cloudCall('save_state', { p_id: syncId(), p_data: data }); }
+
+function adoptState(remote) {
+  state = Object.assign(structuredClone(DEFAULT_STATE), remote);
+  if (typeof DEFAULT_FOOD_PREFS !== 'undefined') for (const k in DEFAULT_FOOD_PREFS) if (!(k in state.foodPrefs)) state.foodPrefs[k] = DEFAULT_FOOD_PREFS[k];
+  localStorage.setItem(KEY, JSON.stringify(state));
+  if (state.profile) showApp(); else showOnboarding();
+}
+async function cloudInit() {
+  if (!cloudOn()) return;
+  try {
+    const remote = await cloudPull();
+    const rT = (remote && remote._ts) || 0;
+    const lT = state._ts || 0;
+    if (remote && rT >= lT && (remote.profile || !state.profile)) adoptState(remote);
+    else if (state.profile) cloudPush(state).catch(() => {});
+  } catch (e) { /* hors-ligne : on garde le local */ }
+}
 
 /* ---------- Dates ---------- */
 function todayStr(d) { return dstr(d || new Date()); }
@@ -846,6 +901,23 @@ RENDERERS.settings = (root) => {
     </div>
 
     <div class="card">
+      <h2>☁️ Sauvegarde en ligne</h2>
+      <p class="muted" style="font-size:13px">Tes données sont sauvegardées en ligne et synchronisées entre appareils via ton code perso. ${cloudOn() ? '<span class="badge green">Activée</span>' : '<span class="badge grey">Désactivée</span>'}</p>
+      <label>🔑 Ton code de sync — <b style="color:var(--red)">note-le et garde-le secret</b> (c'est la clé de tes données)
+        <input id="s-synccode" type="text" value="${esc(syncId())}" readonly onclick="this.select()"/></label>
+      <div class="btn-row">
+        <button class="btn-ghost sm" id="s-synccopy">📋 Copier</button>
+        <button class="btn-ghost sm" id="s-syncnow">🔄 Synchroniser</button>
+      </div>
+      <div class="divider"></div>
+      <label>Récupérer les données d'un autre appareil<input id="s-synclink" type="text" placeholder="colle ici le code de l'autre appareil"/></label>
+      <button class="btn-ghost sm" id="s-syncapply">Charger ce code</button>
+      <label class="mt" style="display:flex;align-items:center;gap:8px;color:var(--text)">
+        <input type="checkbox" id="s-cloudtoggle" ${cloudOn() ? 'checked' : ''} style="width:auto;margin:0"/> Activer la sauvegarde en ligne
+      </label>
+    </div>
+
+    <div class="card">
       <h2>⌚ Apple Santé / BeReal</h2>
       <p class="muted" style="font-size:13px">Une app web locale ne peut pas lire Apple Santé (données sur l'iPhone, accès réservé à une app iOS/HealthKit) ni BeReal (pas d'API publique). Tes séances se notent donc à la main dans l'onglet Sport. Tu peux exporter Santé en fichier et l'importer plus tard si on ajoute cette option.</p>
     </div>
@@ -905,6 +977,21 @@ RENDERERS.settings = (root) => {
     save(); toast('Réglages enregistrés ✓');
     if (state.settings.provider === 'gemini' && state.settings.apiKey) await detectModels(true);
   };
+  $('#s-synccopy').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(syncId()).then(() => toast('Code copié ✓')).catch(() => {}); else toast(syncId()); };
+  $('#s-syncnow').onclick = async () => {
+    try {
+      const r = await cloudPull();
+      if (r && (r._ts || 0) > (state._ts || 0)) { adoptState(r); toast('Récupéré depuis le cloud ✓'); }
+      else { await cloudPush(state); toast('Sauvegardé en ligne ✓'); }
+    } catch (e) { toast('Sync échouée : ' + e.message); }
+  };
+  $('#s-syncapply').onclick = async () => {
+    const code = $('#s-synclink').value.trim(); if (!code) return;
+    setSyncId(code);
+    try { const r = await cloudPull(); if (r) { adoptState(r); toast('Données chargées ✓'); } else { toast('Aucune donnée pour ce code'); } }
+    catch (e) { toast('Échec : ' + e.message); }
+  };
+  $('#s-cloudtoggle').onchange = (e) => { setCloudOn(e.target.checked); if (e.target.checked) cloudPush(state).catch(() => {}); renderView('settings'); };
   $('#s-export').onclick = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -951,6 +1038,7 @@ function showOnboarding() {
 $$('#tabbar .tab').forEach(b => b.onclick = () => renderView(b.dataset.view));
 
 if (state.profile) showApp(); else showOnboarding();
+cloudInit();
 
 /* Service worker : app installable + hors-ligne (ignore les erreurs en local file://) */
 if ('serviceWorker' in navigator) {
