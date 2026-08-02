@@ -472,14 +472,15 @@ async function analyzeGemini(media_type, b64, retried) {
     // Auto-réparation : si le modèle n'existe pas (404), détecte-en un valide et réessaie une fois
     if (res.status === 404 && !retried) {
       const models = await listGeminiModels(state.settings.apiKey).catch(() => []);
-      const def = pickGeminiDefault(models);
-      if (def && def !== model) { state.settings.model = def; save(); return analyzeGemini(media_type, b64, true); }
+      const def = models.find((m) => m !== model && /flash/.test(m) && !/lite|tts|preview/.test(m)) || models.find((m) => m !== model);
+      if (def) { state.settings.model = def; save(); return analyzeGemini(media_type, b64, true); }
     }
     let msg = t.slice(0, 160);
     if (res.status === 400 && /API_KEY_INVALID|API key not valid/i.test(t)) msg = 'Clé API invalide.';
     else if (res.status === 403) msg = 'Accès refusé — vérifie ta clé.';
-    else if (res.status === 404) msg = 'Modèle indisponible — Réglages → « Détecter mes modèles ».';
+    else if (res.status === 429 && /free_tier|limit:\s*0/i.test(t)) msg = 'Ton compte Google n\'a pas de quota gratuit Gemini (limite 0). Active la facturation Google, ou passe en saisie manuelle.';
     else if (res.status === 429) msg = 'Quota atteint, réessaie dans un moment.';
+    else if (res.status === 404) msg = 'Modèle indisponible — Réglages → « Détecter mes modèles ».';
     throw new Error(`Gemini ${res.status} — ${msg}`);
   }
   const data = await res.json();
