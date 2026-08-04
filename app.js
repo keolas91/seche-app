@@ -329,25 +329,50 @@ function weekScore(s) { return weekDays(s).reduce((a, d) => a + dayScore(d).tota
 let mealsViewDate = todayStr();
 RENDERERS.meals = (root) => {
   const s = mealsViewDate;
-  const meals = state.meals[s] || [];
-  const sum = meals.reduce((a, m) => ({ k: a.k + m.kcal, p: a.p + m.proteines, c: a.c + m.glucides, f: a.f + m.lipides }), { k: 0, p: 0, c: 0, f: 0 });
+  const meals = (state.meals[s] || []).slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const t = state.profile.targets;
+  const sc = dayScore(s);
+  const sum = sc.sum || { kcal: 0, p: 0, c: 0, f: 0 };
+  const isToday = s === todayStr();
+  const histDays = Object.keys(state.meals).filter((d) => (state.meals[d] || []).length).sort().reverse();
   root.innerHTML = `
-    <div class="flex-between" style="margin-bottom:12px">
-      <button class="btn-ghost sm" id="m-prev">←</button>
-      <b>${frDate(s)}</b>
-      <button class="btn-ghost sm" id="m-next" ${s >= todayStr() ? 'disabled style="opacity:.4"' : ''}>→</button>
-    </div>
     <div class="card">
-      <div class="flex-between"><h2 style="margin:0">${Math.round(sum.k)} kcal</h2>
-        <span class="muted">${Math.round(sum.p)}P · ${Math.round(sum.c)}G · ${Math.round(sum.f)}L</span></div>
+      <div class="flex-between" style="margin-bottom:12px">
+        <button class="btn-ghost sm" id="m-prev">←</button>
+        <input id="m-date" type="date" value="${s}" max="${todayStr()}" style="width:auto;margin:0;text-align:center"/>
+        <button class="btn-ghost sm" id="m-next" ${isToday ? 'disabled style="opacity:.4"' : ''}>→</button>
+      </div>
+      <div class="flex-between">
+        <div><div class="section-title" style="margin:0">${frDate(s)}${isToday ? " · Aujourd'hui" : ''}</div>
+          <h2 style="margin:2px 0 0">${Math.round(sum.kcal)} <span class="muted" style="font-size:14px">/ ${t.kcal} kcal</span></h2></div>
+        <div class="score-chip">${sc.total}/100</div>
+      </div>
+      <div class="macro mt"><div class="macro-head"><span>Protéines</span><b>${Math.round(sum.p)} / ${t.proteines} g</b></div>${bar('p', sum.p, t.proteines)}</div>
+      <div class="macro"><div class="macro-head"><span>Glucides</span><b>${Math.round(sum.c)} / ${t.glucides} g</b></div>${bar('c', sum.c, t.glucides)}</div>
+      <div class="macro"><div class="macro-head"><span>Lipides</span><b>${Math.round(sum.f)} / ${t.lipides} g</b></div>${bar('f', sum.f, t.lipides)}</div>
     </div>
-    <button class="btn-primary big" id="m-add" style="margin-bottom:14px">📷 Ajouter un repas</button>
-    <div class="card"><h2>Repas</h2>${mealListHtml(meals)}</div>
+    <button class="btn-primary big" id="m-add" style="margin-bottom:14px">📷 Ajouter un repas${isToday ? '' : ' (ce jour)'}</button>
+    <div class="card"><h2>Repas du jour</h2>${mealListHtml(meals)}</div>
+    <div class="card">
+      <h2>📅 Historique</h2>
+      ${histDays.length ? histDays.map((d) => {
+        const dsc = dayScore(d); const ds = dsc.sum || { kcal: 0, p: 0, c: 0, f: 0 };
+        return `<div class="list-item" data-hist="${d}" style="cursor:pointer">
+          <div class="emoji-thumb">${d === todayStr() ? '⭐' : '📆'}</div>
+          <div class="li-body"><div class="li-title">${frDate(d)}</div>
+            <div class="li-sub">${(state.meals[d] || []).length} repas · ${Math.round(ds.p)}P ${Math.round(ds.c)}G ${Math.round(ds.f)}L</div></div>
+          <div style="text-align:right"><div class="li-kcal">${Math.round(ds.kcal)}<small class="muted"> kcal</small></div>
+            <span class="badge ${dsc.total >= 60 ? 'green' : 'grey'}" style="font-size:10px">${dsc.total}/100</span></div>
+        </div>`;
+      }).join('') : '<div class="muted center">Aucun repas enregistré pour l\'instant.</div>'}
+    </div>
   `;
   $('#m-prev').onclick = () => { mealsViewDate = addDays(s, -1); renderView('meals'); };
-  const nx = $('#m-next'); if (s < todayStr()) nx.onclick = () => { mealsViewDate = addDays(s, 1); renderView('meals'); };
+  const nx = $('#m-next'); if (!isToday) nx.onclick = () => { mealsViewDate = addDays(s, 1); renderView('meals'); };
+  $('#m-date').onchange = (e) => { if (e.target.value) { mealsViewDate = e.target.value; renderView('meals'); } };
   $('#m-add').onclick = () => addMealFlow(s);
   bindMealItems(root, s);
+  $$('[data-hist]', root).forEach((el) => el.onclick = () => { mealsViewDate = el.dataset.hist; renderView('meals'); });
 };
 
 /* ---------- Ajout de repas : photo IA ou manuel ---------- */
