@@ -525,20 +525,41 @@ function addMealFlow(dateStr) {
   };
 }
 
+// Convertit n'importe quelle image (dont HEIC iPhone) en JPEG redimensionné
+function resizeImage(dataUrl, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+        const scale = Math.min(1, (maxDim || 1024) / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', quality || 0.82));
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('image illisible'));
+    img.src = dataUrl;
+  });
+}
+
 async function analyzePhotoFlow(dateStr, slot, dataUrl) {
   $('#am-work').innerHTML = `<div class="card center mt"><img class="thumb" style="width:120px;height:120px" src="${dataUrl}"/><div class="mt"><span class="spinner"></span> Analyse en cours…</div></div>`;
+  let thumb = dataUrl;
   try {
-    const r = await analyzePhoto(dataUrl);
-    // Pré-remplit le formulaire manuel avec le résultat IA (éditable)
+    thumb = await resizeImage(dataUrl, 320, 0.7).catch(() => dataUrl);   // miniature légère (stockée)
+    const big = await resizeImage(dataUrl, 1024, 0.82);                   // image JPEG pour l'IA (HEIC -> JPEG)
+    const r = await analyzePhoto(big);
     manualMealForm(dateStr, slot, {
       name: r.plat || 'Repas', kcal: r.kcal, proteines: r.proteines, glucides: r.glucides,
-      lipides: r.lipides, photo: dataUrl, source: 'ai', note: r.ingredients,
+      lipides: r.lipides, photo: thumb, source: 'ai', note: r.ingredients,
     });
     toast('Analyse terminée — vérifie et enregistre');
   } catch (err) {
     $('#am-work').innerHTML = `<div class="card mt"><b class="badge red">Échec</b><p class="muted" style="font-size:13px">${esc(err.message)}</p>
       <button class="btn-ghost" id="am-fallback">Saisir manuellement</button></div>`;
-    $('#am-fallback').onclick = () => manualMealForm(dateStr, slot, { photo: dataUrl });
+    $('#am-fallback').onclick = () => manualMealForm(dateStr, slot, { photo: thumb });
   }
 }
 
