@@ -12,6 +12,7 @@ const KEY = 'seche_app_v1';
 const SUPA_URL = 'https://gnhpbcwywmkiaifbfiie.supabase.co';
 const SUPA_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduaHBiY3d5d21raWFpZmJmaWllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU2NjczNzIsImV4cCI6MjEwMTI0MzM3Mn0.dYNC5lbLtkwg67jx_TSJol_Wjzpbf6Z53-GDlgoyJ00';
 const SYNC_KEY = 'seche_sync_id';
+const GOOGLE_CLIENT_ID = '639724109817-4a1vig0gaa999ndk500i03mgtuvrfupd.apps.googleusercontent.com';
 const DEFAULT_STATE = {
   profile: null,
   meals: {},        // 'YYYY-MM-DD' -> [meal]
@@ -86,6 +87,42 @@ async function cloudInit() {
     if (remote && rT >= lT && (remote.profile || !state.profile)) adoptState(remote);
     else if (state.profile) cloudPush(state).catch(() => {});
   } catch (e) { /* hors-ligne : on garde le local */ }
+}
+
+/* ---------- Connexion Google (Google Identity Services) ---------- */
+function jwtPayload(token) {
+  let s = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bytes = Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+async function subToUuid(sub) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('seche-google:' + sub));
+  const h = [...new Uint8Array(buf)].slice(0, 16).map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+function googleUser() { try { return JSON.parse(localStorage.getItem('seche_google') || 'null'); } catch (e) { return null; } }
+async function onGoogleCredential(resp) {
+  try {
+    const p = jwtPayload(resp.credential);
+    const uuid = await subToUuid(p.sub);
+    localStorage.setItem('seche_google', JSON.stringify({ email: p.email || '', name: p.name || '' }));
+    setSyncId(uuid); setCloudOn(true);
+    const remote = await cloudPull().catch(() => null);
+    if (remote && (remote.profile || (remote.meals && Object.keys(remote.meals).length))) adoptState(remote);
+    else cloudPush(state).catch(() => {});
+    toast('Connecté ✓ ' + (p.email || 'Google'));
+    if (currentView === 'settings') renderView('settings');
+  } catch (e) { toast('Échec de la connexion Google'); }
+}
+function initGoogleButton(el, tries) {
+  if (!el) return;
+  if (!(window.google && google.accounts && google.accounts.id)) {
+    if ((tries || 0) < 25) return setTimeout(() => initGoogleButton(el, (tries || 0) + 1), 300);
+    el.innerHTML = '<span class="muted" style="font-size:12px">Bouton Google indisponible — rouvre l\'app.</span>'; return;
+  }
+  google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: onGoogleCredential, auto_select: false });
+  google.accounts.id.renderButton(el, { theme: 'filled_blue', size: 'large', text: 'signin_with', shape: 'pill', locale: 'fr' });
 }
 
 /* ---------- Dates ---------- */
@@ -985,6 +1022,7 @@ RENDERERS.settings = (root) => {
 
     <div class="card">
       <h2>☁️ Sauvegarde en ligne</h2>
+      <div id="s-google" style="margin:6px 0 12px"></div>
       <p class="muted" style="font-size:13px">Tes données sont sauvegardées en ligne et synchronisées entre appareils via ton code perso. ${cloudOn() ? '<span class="badge green">Activée</span>' : '<span class="badge grey">Désactivée</span>'}</p>
       <label>🔑 Ton code de sync — <b style="color:var(--red)">note-le et garde-le secret</b> (c'est la clé de tes données)
         <input id="s-synccode" type="text" value="${esc(syncId())}" readonly onclick="this.select()"/></label>
@@ -1060,6 +1098,17 @@ RENDERERS.settings = (root) => {
     save(); toast('Réglages enregistrés ✓');
     if (state.settings.provider === 'gemini' && state.settings.apiKey) await detectModels(true);
   };
+  const gu = googleUser();
+  if (gu) {
+    $('#s-google').innerHTML = `<div class="list-item" style="padding:8px 0;border:none">
+      <div class="emoji-thumb" style="background:#e8f1fe">🔵</div>
+      <div class="li-body"><div class="li-title">Connecté à Google</div><div class="li-sub">${esc(gu.email || gu.name || '')}</div></div>
+      <button class="btn-ghost sm" id="g-out">Déconnexion</button></div>`;
+    $('#g-out').onclick = () => { localStorage.removeItem('seche_google'); renderView('settings'); toast('Déconnecté'); };
+  } else {
+    $('#s-google').innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:8px">🔵 Connecte-toi avec Google pour retrouver tes données partout, <b>sans code à saisir</b> :</div><div id="g-btn"></div>`;
+    initGoogleButton($('#g-btn'));
+  }
   $('#s-synccopy').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(syncId()).then(() => toast('Code copié ✓')).catch(() => {}); else toast(syncId()); };
   $('#s-syncnow').onclick = async () => {
     try {
