@@ -106,11 +106,24 @@ async function onGoogleCredential(resp) {
   try {
     const p = jwtPayload(resp.credential);
     const uuid = await subToUuid(p.sub);
+    const oldId = syncId();
+    const has = (d) => d && (d.profile || (d.meals && Object.keys(d.meals).length));
     localStorage.setItem('seche_google', JSON.stringify({ email: p.email || '', name: p.name || '' }));
-    setSyncId(uuid); setCloudOn(true);
-    const remote = await cloudPull().catch(() => null);
-    if (remote && (remote.profile || (remote.meals && Object.keys(remote.meals).length))) adoptState(remote);
-    else cloudPush(state).catch(() => {});
+    setCloudOn(true);
+    setSyncId(uuid);
+    let remote = await cloudPull().catch(() => null);
+    if (has(remote)) {
+      adoptState(remote);
+    } else if (oldId && oldId !== uuid) {
+      // Migre les données de l'ancien code de sync vers le compte Google
+      setSyncId(oldId);
+      const old = await cloudPull().catch(() => null);
+      setSyncId(uuid);
+      if (has(old)) { adoptState(old); await cloudPush(state).catch(() => {}); }
+      else if (state.profile) await cloudPush(state).catch(() => {});
+    } else if (state.profile) {
+      cloudPush(state).catch(() => {});
+    }
     toast('Connecté ✓ ' + (p.email || 'Google'));
     if (currentView === 'settings') renderView('settings');
   } catch (e) { toast('Échec de la connexion Google'); }
@@ -1022,20 +1035,8 @@ RENDERERS.settings = (root) => {
 
     <div class="card">
       <h2>☁️ Sauvegarde en ligne</h2>
-      <div id="s-google" style="margin:6px 0 12px"></div>
-      <p class="muted" style="font-size:13px">Tes données sont sauvegardées en ligne et synchronisées entre appareils via ton code perso. ${cloudOn() ? '<span class="badge green">Activée</span>' : '<span class="badge grey">Désactivée</span>'}</p>
-      <label>🔑 Ton code de sync — <b style="color:var(--red)">note-le et garde-le secret</b> (c'est la clé de tes données)
-        <input id="s-synccode" type="text" value="${esc(syncId())}" readonly onclick="this.select()"/></label>
-      <div class="btn-row">
-        <button class="btn-ghost sm" id="s-synccopy">📋 Copier</button>
-        <button class="btn-ghost sm" id="s-syncnow">🔄 Synchroniser</button>
-      </div>
-      <div class="divider"></div>
-      <label>Récupérer les données d'un autre appareil<input id="s-synclink" type="text" placeholder="colle ici le code de l'autre appareil"/></label>
-      <button class="btn-ghost sm" id="s-syncapply">Charger ce code</button>
-      <label class="mt" style="display:flex;align-items:center;gap:8px;color:var(--text)">
-        <input type="checkbox" id="s-cloudtoggle" ${cloudOn() ? 'checked' : ''} style="width:auto;margin:0"/> Activer la sauvegarde en ligne
-      </label>
+      <div id="s-google" style="margin:6px 0 4px"></div>
+      <p class="muted" style="font-size:12px">Une fois connecté à Google, tes données (repas, poids, score) sont sauvegardées en ligne et te suivent sur tous tes appareils — automatiquement, sans rien à saisir.</p>
     </div>
 
     <div class="card">
@@ -1109,21 +1110,6 @@ RENDERERS.settings = (root) => {
     $('#s-google').innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:8px">🔵 Connecte-toi avec Google pour retrouver tes données partout, <b>sans code à saisir</b> :</div><div id="g-btn"></div>`;
     initGoogleButton($('#g-btn'));
   }
-  $('#s-synccopy').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(syncId()).then(() => toast('Code copié ✓')).catch(() => {}); else toast(syncId()); };
-  $('#s-syncnow').onclick = async () => {
-    try {
-      const r = await cloudPull();
-      if (r && (r._ts || 0) > (state._ts || 0)) { adoptState(r); toast('Récupéré depuis le cloud ✓'); }
-      else { await cloudPush(state); toast('Sauvegardé en ligne ✓'); }
-    } catch (e) { toast('Sync échouée : ' + e.message); }
-  };
-  $('#s-syncapply').onclick = async () => {
-    const code = $('#s-synclink').value.trim(); if (!code) return;
-    setSyncId(code);
-    try { const r = await cloudPull(); if (r) { adoptState(r); toast('Données chargées ✓'); } else { toast('Aucune donnée pour ce code'); } }
-    catch (e) { toast('Échec : ' + e.message); }
-  };
-  $('#s-cloudtoggle').onchange = (e) => { setCloudOn(e.target.checked); if (e.target.checked) cloudPush(state).catch(() => {}); renderView('settings'); };
   $('#s-export').onclick = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
