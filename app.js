@@ -90,7 +90,7 @@ async function cloudInit() {
 
 /* ---------- Dates ---------- */
 function todayStr(d) { return dstr(d || new Date()); }
-function dstr(d) { return d.toISOString().slice(0, 10); }
+function dstr(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function parseD(s) { const [y, m, dd] = s.split('-').map(Number); return new Date(y, m - 1, dd); }
 const JOURS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 const JOURS_C = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
