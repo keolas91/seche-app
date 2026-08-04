@@ -19,7 +19,7 @@ const DEFAULT_STATE = {
   weights: [],      // [{date,kg}]
   foodPrefs: {},    // nom -> true/false
   customFoods: [],  // [{nom,categorie,kcal,proteines,glucides,lipides}]
-  settings: { provider: 'gemini', apiKey: '', model: 'gemini-2.5-flash' },
+  settings: { provider: 'claude', apiKey: '', model: 'claude-haiku-4-5-20251001' },
 };
 let state = load();
 
@@ -183,13 +183,38 @@ function openModal(html) {
 function closeModal() { $('#modal-backdrop').classList.add('hidden'); $('#modal').innerHTML = ''; }
 $('#modal-backdrop').addEventListener('click', e => { if (e.target.id === 'modal-backdrop') closeModal(); });
 
-function ringSvg(pct, color) {
-  const r = 50, c = 2 * Math.PI * r, off = c * (1 - Math.min(1, pct));
-  return `<svg width="116" height="116" viewBox="0 0 116 116">
-    <circle cx="58" cy="58" r="${r}" fill="none" stroke="var(--bg-2)" stroke-width="11"/>
-    <circle cx="58" cy="58" r="${r}" fill="none" stroke="${color}" stroke-width="11"
-      stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${off}"/>
+function ringSvg(pct, color, size) {
+  size = size || 116; const sw = Math.round(size * 0.095);
+  const cx = size / 2, r = cx - sw;
+  const c = 2 * Math.PI * r, off = c * (1 - Math.min(1, Math.max(0, pct || 0)));
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="var(--bg-2)" stroke-width="${sw}"/>
+    <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
+      stroke-linecap="round" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" style="transition:stroke-dashoffset .7s cubic-bezier(.4,0,.2,1)"/>
   </svg>`;
+}
+/* ---------- Gamification : XP, niveaux, badges ---------- */
+function allDatesWithData() { return [...new Set([...Object.keys(state.meals), ...Object.keys(state.workouts)])]; }
+function totalXP() { return allDatesWithData().reduce((a, d) => a + dayScore(d).total, 0); }
+function levelInfo() { const xp = totalXP(), per = 300; return { xp, level: Math.floor(xp / per) + 1, inLevel: xp % per, per }; }
+function totalMeals() { return Object.values(state.meals).reduce((a, arr) => a + (arr ? arr.length : 0), 0); }
+function workoutsDone() { return Object.values(state.workouts).filter((w) => w && w.done).length; }
+function computeBadges() {
+  const meals = totalMeals(), wo = workoutsDone(), st = streakDays(), t = state.profile.targets;
+  const perfect = allDatesWithData().some((d) => dayScore(d).total >= 100);
+  const protDay = Object.keys(state.meals).some((d) => { const su = dayScore(d).sum; return su && su.p >= t.proteines; });
+  return [
+    { emoji: '📸', name: '1er repas', on: meals >= 1 },
+    { emoji: '🍽️', name: '50 repas', on: meals >= 50 },
+    { emoji: '🔥', name: 'Série 3j', on: st >= 3 },
+    { emoji: '🔥', name: 'Série 7j', on: st >= 7 },
+    { emoji: '👑', name: 'Série 30j', on: st >= 30 },
+    { emoji: '⭐', name: 'Jour parfait', on: perfect },
+    { emoji: '💪', name: 'Sport ×3', on: wo >= 3 },
+    { emoji: '🏃', name: 'Sport ×10', on: wo >= 10 },
+    { emoji: '🥩', name: 'Protéines', on: protDay },
+    { emoji: '⚖️', name: '1re pesée', on: (state.weights || []).length >= 1 },
+  ];
 }
 function bar(cls, val, max) {
   const pct = Math.min(100, max ? (val / max) * 100 : 0);
@@ -212,26 +237,59 @@ function renderView(v) {
 }
 
 /* ---------- HOME ---------- */
+let homeViewDate = todayStr();
 RENDERERS.home = (root) => {
-  const s = todayStr();
+  const s = homeViewDate;
+  const isToday = s === todayStr();
   const sc = dayScore(s);
   const t = state.profile.targets;
   const sum = sc.sum || { kcal: 0, p: 0, c: 0, f: 0 };
   const pl = plannedWorkout(s);
   const w = state.workouts[s];
-  $('#today-score-chip').textContent = sc.total + ' pts';
-
+  const lvl = levelInfo();
+  const streak = streakDays();
+  const badges = computeBadges();
   const kcalLeft = t.kcal - sum.kcal;
+  $('#today-score-chip').textContent = 'Niv. ' + lvl.level;
+  const scoreLabel = sc.total >= 100 ? 'Parfait ! 🎉' : sc.total >= 80 ? 'Excellent 💪' : sc.total >= 60 ? 'Bien 👍' : sc.total >= 30 ? 'En cours…' : 'À démarrer';
+
   root.innerHTML = `
+    <div class="card" style="padding:10px 14px">
+      <div class="flex-between">
+        <button class="btn-ghost sm" id="h-prev">←</button>
+        <input id="h-date" type="date" value="${s}" max="${todayStr()}" style="width:auto;margin:0;text-align:center"/>
+        <button class="btn-ghost sm" id="h-next" ${isToday ? 'disabled style="opacity:.4"' : ''}>→</button>
+      </div>
+    </div>
+
+    <div class="card hero">
+      <div class="hero-ring">
+        <div class="ring big">${ringSvg(sc.total / 100, 'var(--accent)', 156)}
+          <div class="ring-center"><b style="font-size:38px">${sc.total}</b><small>/ 100 pts</small></div>
+        </div>
+        <div class="hero-label">${scoreLabel}</div>
+        <div class="section-title" style="margin:2px 0 0">${frDate(s)}${isToday ? " · Aujourd'hui" : ''}</div>
+      </div>
+      <div class="divider"></div>
+      <div class="flex-between" style="font-size:13px;margin-bottom:6px">
+        <b>⭐ Niveau ${lvl.level}</b><span class="muted">${lvl.inLevel} / ${lvl.per} XP</span>
+      </div>
+      ${bar('k', lvl.inLevel, lvl.per)}
+      <div class="stat-grid mt">
+        <div class="stat"><b>🔥 ${streak}</b><small>jours de série</small></div>
+        <div class="stat"><b>🏅 ${badges.filter((b) => b.on).length}/${badges.length}</b><small>badges</small></div>
+        <div class="stat"><b>${lvl.xp}</b><small>XP total</small></div>
+      </div>
+    </div>
+
     <div class="card">
-      <div class="flex-between" style="margin-bottom:14px">
-        <div><div class="section-title" style="margin:0">${frDate(s)}</div>
-          <h2 style="margin:2px 0 0">Aujourd'hui</h2></div>
-        <div class="badge ${kcalLeft >= 0 ? 'green' : 'red'}">${kcalLeft >= 0 ? kcalLeft + ' kcal restantes' : Math.abs(kcalLeft) + ' kcal de dépassement'}</div>
+      <div class="flex-between" style="margin-bottom:12px">
+        <h2 style="margin:0">🍎 Calories</h2>
+        <span class="badge ${kcalLeft >= 0 ? 'green' : 'red'}">${kcalLeft >= 0 ? kcalLeft + ' restantes' : Math.abs(kcalLeft) + ' de trop'}</span>
       </div>
       <div class="ring-wrap">
-        <div class="ring">${ringSvg(sum.kcal / t.kcal, 'var(--accent)')}
-          <div class="ring-center"><b>${Math.round(sum.kcal)}</b><small>/ ${t.kcal} kcal</small></div>
+        <div class="ring">${ringSvg(sum.kcal / t.kcal, 'var(--accent-2)')}
+          <div class="ring-center"><b>${Math.round(sum.kcal)}</b><small>/ ${t.kcal}</small></div>
         </div>
         <div style="flex:1">
           <div class="macro"><div class="macro-head"><span>Protéines</span><b>${Math.round(sum.p)} / ${t.proteines} g</b></div>${bar('p', sum.p, t.proteines)}</div>
@@ -239,60 +297,59 @@ RENDERERS.home = (root) => {
           <div class="macro"><div class="macro-head"><span>Lipides</span><b>${Math.round(sum.f)} / ${t.lipides} g</b></div>${bar('f', sum.f, t.lipides)}</div>
         </div>
       </div>
-      <button class="btn-primary big" id="home-add">📷 Ajouter un repas</button>
+      <button class="${isToday ? 'btn-primary' : 'btn-ghost'} big" id="h-add" style="width:100%;margin-top:12px">📷 Ajouter un repas${isToday ? '' : ' (ce jour)'}</button>
     </div>
 
-    ${(typeof QUICK_MEALS !== 'undefined' && QUICK_MEALS.length) ? `
+    <div class="card">
+      <h2>🎯 Quêtes du jour</h2>
+      <div class="quests">
+        ${sc.parts.map((p) => `<div class="quest ${p.pts === p.max ? 'done' : ''}">
+          <div class="q-check">${p.pts === p.max ? '✓' : ''}</div>
+          <div class="q-body"><div class="q-title">${p.label}</div>
+            <div class="bar k" style="height:6px;margin-top:5px"><i style="width:${Math.round(p.pts / p.max * 100)}%"></i></div></div>
+          <div class="q-pts">+${p.pts}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    ${(typeof QUICK_MEALS !== 'undefined' && QUICK_MEALS.length && isToday) ? `
     <div class="card">
       <div class="section-title" style="margin-top:0">⚡ Repas rapides</div>
       ${QUICK_MEALS.map((q, i) => `<div class="list-item">
         <div class="emoji-thumb">${slotEmoji(q.slot)}</div>
         <div class="li-body"><div class="li-title">${esc(q.nom)}</div>
-          <div class="li-sub">${q.slot} · ${q.kcal} kcal · ${q.proteines}P ${q.glucides}G ${q.lipides}L</div></div>
+          <div class="li-sub">${q.kcal} kcal · ${q.proteines}P ${q.glucides}G ${q.lipides}L</div></div>
         <button class="btn-ghost sm quick-add" data-q="${i}">+ Ajouter</button>
       </div>`).join('')}
     </div>` : ''}
 
     <div class="card">
       <div class="flex-between">
-        <div><div class="section-title" style="margin:0">Séance du jour</div>
-          <h2 style="margin:2px 0 0">${pl.emoji} ${pl.type}</h2></div>
-        ${pl.rest
-          ? '<span class="badge grey">Repos</span>'
-          : (w && w.done
-            ? '<span class="badge green">✓ Fait</span>'
-            : '<button class="btn-ghost sm" id="home-train">Marquer fait</button>')}
+        <div><div class="section-title" style="margin:0">Séance</div><h2 style="margin:2px 0 0">${pl.emoji} ${pl.type}</h2></div>
+        ${pl.rest ? '<span class="badge grey">Repos</span>' : (w && w.done ? '<span class="badge green">✓ Fait</span>' : (isToday ? '<button class="btn-ghost sm" id="h-train">Marquer fait</button>' : '<span class="badge grey">Non fait</span>'))}
       </div>
     </div>
 
     <div class="card">
-      <div class="flex-between" style="margin-bottom:12px">
-        <h2 style="margin:0">Score du jour</h2>
-        <div class="score-chip">${sc.total}/100</div>
-      </div>
-      <ul class="score-list">
-        ${sc.parts.map(p => `<li><span>${p.label}</span>
-          <b class="${p.pts === p.max ? '' : 'muted'}">${p.pts}/${p.max}</b></li>`).join('')}
-      </ul>
-      <div class="stat-grid mt">
-        <div class="stat"><b>🔥${streakDays()}</b><small>jours de série</small></div>
-        <div class="stat"><b>${weekScore(s)}</b><small>score semaine</small></div>
-        <div class="stat"><b>${state.weights.length ? state.weights[state.weights.length - 1].kg : state.profile.weight}<small style="font-size:12px">kg</small></b><small>poids actuel</small></div>
+      <h2>🏆 Badges</h2>
+      <div class="badges-grid">
+        ${badges.map((b) => `<div class="badge-cell ${b.on ? 'on' : ''}">
+          <div class="b-emoji">${b.on ? b.emoji : '🔒'}</div><small>${b.name}</small>
+        </div>`).join('')}
       </div>
     </div>
 
-    ${sum.kcal === 0 ? `<div class="card center muted">Aucun repas encore aujourd'hui.<br>Prends ton assiette en photo pour commencer 📸</div>` : renderTodayMeals(s)}
+    <div class="card"><h2>Repas ${isToday ? "d'aujourd'hui" : 'du jour'}</h2>${mealListHtml((state.meals[s] || []).slice().sort((a, b) => (a.ts || 0) - (b.ts || 0)))}</div>
   `;
-  $('#home-add').onclick = () => addMealFlow(s);
-  const ht = $('#home-train'); if (ht) ht.onclick = () => { toggleWorkout(s); renderView('home'); };
-  $$('.quick-add', root).forEach(b => b.onclick = () => {
+  $('#h-prev').onclick = () => { homeViewDate = addDays(s, -1); renderView('home'); };
+  const hn = $('#h-next'); if (!isToday) hn.onclick = () => { homeViewDate = addDays(s, 1); renderView('home'); };
+  $('#h-date').onchange = (e) => { if (e.target.value) { homeViewDate = e.target.value; renderView('home'); } };
+  const ha = $('#h-add'); if (ha) ha.onclick = () => addMealFlow(s);
+  const ht = $('#h-train'); if (ht) ht.onclick = () => { toggleWorkout(s); renderView('home'); };
+  $$('.quick-add', root).forEach((b) => b.onclick = () => {
     const q = QUICK_MEALS[Number(b.dataset.q)];
-    (state.meals[s] = state.meals[s] || []).push({
-      id: 'm' + Date.now() + Math.round(performance.now()), name: q.nom, slot: q.slot,
-      kcal: q.kcal, proteines: q.proteines, glucides: q.glucides, lipides: q.lipides,
-      photo: null, source: 'quick', ts: Date.now(),
-    });
-    save(); renderView('home'); toast(`${q.slot} ajouté ✓`);
+    (state.meals[s] = state.meals[s] || []).push({ id: 'm' + Date.now() + Math.round(performance.now()), name: q.nom, slot: q.slot, kcal: q.kcal, proteines: q.proteines, glucides: q.glucides, lipides: q.lipides, photo: null, source: 'quick', ts: Date.now() });
+    save(); renderView('home'); toast('Ajouté ✓');
   });
   bindMealItems(root, s);
 };
@@ -444,7 +501,7 @@ const PROVIDERS = {
     models: [['claude-haiku-4-5-20251001', 'Haiku 4.5 — le moins cher'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-opus-4-8', 'Opus 4.8']],
   },
 };
-function currentProvider() { return PROVIDERS[state.settings.provider] ? state.settings.provider : 'gemini'; }
+function currentProvider() { return PROVIDERS[state.settings.provider] ? state.settings.provider : 'claude'; }
 
 function extractJson(txt) {
   const jm = (txt || '').match(/\{[\s\S]*\}/);
@@ -915,8 +972,8 @@ RENDERERS.settings = (root) => {
       <p class="muted" style="font-size:13px">Choisis un fournisseur et colle ta clé pour estimer calories & macros depuis une photo. La clé reste stockée uniquement sur cet appareil.</p>
       <label>Fournisseur
         <select id="s-provider">
-          <option value="gemini" ${prov === 'gemini' ? 'selected' : ''}>Google Gemini — gratuit ✅</option>
-          <option value="claude" ${prov === 'claude' ? 'selected' : ''}>Anthropic Claude</option>
+          <option value="claude" ${prov === 'claude' ? 'selected' : ''}>Anthropic Claude — photo in-app</option>
+          <option value="gemini" ${prov === 'gemini' ? 'selected' : ''}>Google Gemini</option>
         </select></label>
       <label>Clé API<input id="s-key" type="password" value="${esc(state.settings.apiKey)}" placeholder="${PROVIDERS[prov].keyHint}"/></label>
       <label>Modèle<select id="s-model"></select></label>
