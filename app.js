@@ -101,11 +101,17 @@ async function subToUuid(sub) {
   const h = [...new Uint8Array(buf)].slice(0, 16).map((x) => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 }
+async function emailToUuid(email) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('seche-user:' + String(email || '').trim().toLowerCase()));
+  const h = [...new Uint8Array(buf)].slice(0, 16).map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 function googleUser() { try { return JSON.parse(localStorage.getItem('seche_google') || 'null'); } catch (e) { return null; } }
 async function onGoogleCredential(resp) {
   try {
     const p = jwtPayload(resp.credential);
-    const uuid = await subToUuid(p.sub);
+    if (!p.email) throw new Error('email manquant');
+    const uuid = await emailToUuid(p.email);
     const oldId = syncId();
     const has = (d) => d && (d.profile || (d.meals && Object.keys(d.meals).length));
     localStorage.setItem('seche_google', JSON.stringify({ email: p.email || '', name: p.name || '' }));
@@ -1138,6 +1144,7 @@ function showApp() {
 function showOnboarding() {
   $('#onboarding').classList.remove('hidden');
   ['#topbar', '#views', '#tabbar'].forEach(s => $(s).classList.add('hidden'));
+  initGoogleButton($('#onb-google'));
   $('#onb-save').onclick = () => {
     const p = {
       sex: $('#onb-sex').value,
